@@ -3,6 +3,7 @@ const cors = require("cors");
 const inventoryRoutes = require("./routes/inventoryRoutes");
 const dashboardRoutes = require("./routes/dashboardRoutes");
 const authRoutes = require("./routes/authRoutes");
+const userRoutes = require("./routes/userRoutes");
 
 const healthRoutes = require("./routes/healthRoutes");
 const productRoutes = require("./routes/productRoutes");
@@ -19,10 +20,12 @@ app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/orders", orderRoutes);
 app.use("/api/auth", authRoutes);
 
+app.use("/api/users", userRoutes);
 // Routes
 app.use("/api/health", healthRoutes);
 app.use("/api/products", productRoutes);
 app.use("/api/customers", customerRoutes);
+
 
 
 module.exports = app;
