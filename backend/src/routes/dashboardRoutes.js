@@ -1,5 +1,7 @@
 const express = require("express");
 const router = express.Router();
+const { authenticateToken } = require("../middleware/authMiddleware");
+const { authorizeRoles } = require("../middleware/roleMiddleware");
 
 const {
   getDashboard
@@ -7,7 +9,12 @@ const {
 
 
 // Get dashboard data
-router.get("/", getDashboard);
+router.get(
+  "/",
+  authenticateToken,
+  authorizeRoles("Employee", "Manager", "Admin"),
+  getDashboard
+);
 
 
 module.exports = router;

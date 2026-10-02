@@ -63,7 +63,7 @@ const getOrderById = async (req, res) => {
       });
     }
 
-    res.status(200).json(result.rows[0]);
+   
         const itemsResult = await pool.query(
     `SELECT
         order_items.id,
@@ -79,6 +79,11 @@ const getOrderById = async (req, res) => {
     ORDER BY order_items.id ASC`,
     [id]
     );
+
+    res.status(200).json({
+  ...result.rows[0],
+  items: itemsResult.rows
+});
 
 
   } catch (error) {
