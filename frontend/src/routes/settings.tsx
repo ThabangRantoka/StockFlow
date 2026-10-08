@@ -63,10 +63,11 @@ function SettingsPage() {
           {tab === "profile" && (
             <Panel title="Profile" description="How your details appear across StockFlow">
               <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="Full name" defaultValue={user.name} />
-                <Field label="Work email" defaultValue={user.email} />
-                <Field label="Job title" defaultValue="Retail Operations Lead" />
-                <Field label="Phone" defaultValue="+27 82 000 1122" />
+                <Field label="Full name" defaultValue={" "} />
+                <Field label="Work email" defaultValue={" "} />
+                <Field label="Role" defaultValue=" " />
+                <Field label="Account status" defaultValue=" " />
+                <Field label="Phone" defaultValue=" " />
               </div>
               <SaveBar />
             </Panel>
@@ -132,7 +133,7 @@ function SettingsPage() {
                         <p className="font-bold">{r.name}</p>
                         <p className="mt-0.5 text-xs text-muted-foreground">{r.desc}</p>
                       </div>
-                      {r.name === user.role && (
+                      {r.name === user?.role && (
                         <span className="shrink-0 rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-semibold text-primary">
                           Your role
                         </span>

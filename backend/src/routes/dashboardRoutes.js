@@ -1,20 +1,17 @@
 const express = require("express");
-const router = express.Router();
-const { authenticateToken } = require("../middleware/authMiddleware");
-const { authorizeRoles } = require("../middleware/roleMiddleware");
 
 const {
-  getDashboard
+  getDashboard,
 } = require("../controllers/dashboardController");
 
-
-// Get dashboard data
-router.get(
-  "/",
+const {
   authenticateToken,
-  authorizeRoles("Employee", "Manager", "Admin"),
-  getDashboard
-);
+} = require("../middleware/authMiddleware");
 
+const router = express.Router();
+
+// GET /api/dashboard
+// Accessible to any authenticated StockFlow user.
+router.get("/", authenticateToken, getDashboard);
 
 module.exports = router;
