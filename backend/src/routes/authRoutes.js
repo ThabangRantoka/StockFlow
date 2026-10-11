@@ -1,22 +1,33 @@
 
 const express = require("express");
-const router = express.Router();
-
-const { authenticateToken } = require("../middleware/authMiddleware");
 
 const {
   registerUser,
   loginUser,
   getMyProfile,
-  updateMyProfile
+  updateMyProfile,
+  changePassword,
 } = require("../controllers/authController");
 
-// Public routes
+const {
+  authenticateToken,
+} = require("../middleware/authMiddleware");
+
+const router = express.Router();
+
+// Public authentication routes
 router.post("/register", registerUser);
 router.post("/login", loginUser);
 
-// Protected routes — user must be logged in
+// Protected profile routes
 router.get("/me", authenticateToken, getMyProfile);
 router.put("/me", authenticateToken, updateMyProfile);
+
+// Protected password-change route
+router.put(
+  "/change-password",
+  authenticateToken,
+  changePassword
+);
 
 module.exports = router;

@@ -269,6 +269,94 @@ const updateMyProfile = async (req, res) => {
   }
 };
 
+
+const changePassword = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { currentPassword, newPassword } = req.body || {};
+
+    if (
+      typeof currentPassword !== "string" ||
+      typeof newPassword !== "string" ||
+      !currentPassword ||
+      !newPassword
+    ) {
+      return res.status(400).json({
+        message: "Current password and new password are required",
+      });
+    }
+
+    if (newPassword.length < 8 || newPassword.length > 72) {
+      return res.status(400).json({
+        message: "New password must be between 8 and 72 characters",
+      });
+    }
+
+    if (currentPassword === newPassword) {
+      return res.status(400).json({
+        message: "New password must be different from current password",
+      });
+    }
+
+    const result = await pool.query(
+      "SELECT id, password, status FROM users WHERE id = $1",
+      [userId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        message: "User not found",
+      });
+    }
+
+    const account = result.rows[0];
+
+    if (account.status !== "Active") {
+      return res.status(403).json({
+        message: "Account is inactive",
+      });
+    }
+
+    const passwordMatches = await bcrypt.compare(
+      currentPassword,
+      account.password
+    );
+
+    if (!passwordMatches) {
+      return res.status(401).json({
+        message: "Current password is incorrect",
+      });
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    const updateResult = await pool.query(
+      `UPDATE users
+       SET password = $1
+       WHERE id = $2 AND password = $3
+       RETURNING id`,
+      [hashedPassword, userId, account.password]
+    );
+
+    if (updateResult.rowCount === 0) {
+      return res.status(409).json({
+        message: "Password was changed elsewhere. Please try again.",
+      });
+    }
+
+    return res.status(200).json({
+      message: "Password changed successfully",
+    });
+  } catch (error) {
+    console.error("Change password error:", error);
+
+    return res.status(500).json({
+      message: "Failed to change password",
+    });
+  }
+};
+
+
 // =========================
 // EXPORT CONTROLLERS
 // =========================
@@ -277,5 +365,6 @@ module.exports = {
   registerUser,
   loginUser,
   getMyProfile,
-  updateMyProfile
+  updateMyProfile,
+  changePassword,
 };

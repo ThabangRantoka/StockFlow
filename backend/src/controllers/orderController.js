@@ -1,4 +1,15 @@
+
 const pool = require("../config/database");
+
+const {
+  createLowStockNotifications,
+} = require("../services/lowStockNotificationService");
+
+
+const {
+  createOrderNotification,
+  createOrderStatusNotification,
+} = require("../services/orderNotificationService");
 
 
 // ========================
@@ -24,7 +35,7 @@ const getOrders = async (req, res) => {
     res.status(200).json(result.rows);
 
   } catch (error) {
-    console.error(error);
+    console.error("Get orders error:", error);
 
     res.status(500).json({
       message: "Failed to get orders"
@@ -63,31 +74,29 @@ const getOrderById = async (req, res) => {
       });
     }
 
-   
-        const itemsResult = await pool.query(
-    `SELECT
+    const itemsResult = await pool.query(
+      `SELECT
         order_items.id,
         order_items.product_id,
         products.name,
         products.sku,
         order_items.quantity,
         order_items.unit_price
-    FROM order_items
-    JOIN products
-        ON order_items.product_id = products.id
-    WHERE order_items.order_id = $1
-    ORDER BY order_items.id ASC`,
-    [id]
+       FROM order_items
+       JOIN products
+         ON order_items.product_id = products.id
+       WHERE order_items.order_id = $1
+       ORDER BY order_items.id ASC`,
+      [id]
     );
 
     res.status(200).json({
-  ...result.rows[0],
-  items: itemsResult.rows
-});
-
+      ...result.rows[0],
+      items: itemsResult.rows
+    });
 
   } catch (error) {
-    console.error(error);
+    console.error("Get order error:", error);
 
     res.status(500).json({
       message: "Failed to get order"
@@ -100,37 +109,96 @@ const getOrderById = async (req, res) => {
 // CREATE ORDER
 // ========================
 const createOrder = async (req, res) => {
+  let client;
+
   try {
     const { customer_id, status } = req.body;
 
-    const result = await pool.query(
+    const orderStatus = status || "Pending";
+
+    client = await pool.connect();
+
+    // Start transaction
+    await client.query("BEGIN");
+
+    // 1. Create the order
+    const result = await client.query(
       `INSERT INTO orders
        (customer_id, status, total_amount)
        VALUES ($1, $2, 0)
        RETURNING *`,
-      [customer_id, status || "Pending"]
+      [customer_id, orderStatus]
     );
 
-    res.status(201).json(result.rows[0]);
+    const newOrder = result.rows[0];
+
+    // 2. Create notifications for active
+    //    Admins and Managers
+    await createOrderNotification(
+      client,
+      newOrder.id,
+      newOrder.status
+    );
+
+    // 3. Save order and notifications together
+    await client.query("COMMIT");
+
+    return res.status(201).json(newOrder);
 
   } catch (error) {
-    console.error(error);
+    console.error("Create order error:", error);
 
-    res.status(500).json({
+    if (client) {
+      try {
+        await client.query("ROLLBACK");
+      } catch (rollbackError) {
+        console.error(
+          "Create order rollback error:",
+          rollbackError
+        );
+      }
+    }
+
+    return res.status(500).json({
       message: "Failed to create order"
     });
+
+  } finally {
+    if (client) {
+      client.release();
+    }
   }
 };
+
 
 
 // ========================
 // ADD ITEM TO ORDER
 // ========================
 const addOrderItem = async (req, res) => {
-  const client = await pool.connect();
+  let client;
 
   try {
-    const { order_id, product_id, quantity } = req.body;
+    const {
+      order_id,
+      product_id,
+      quantity
+    } = req.body;
+
+    const requestedQuantity = Number(quantity);
+
+    // Validate quantity before opening transaction
+    if (
+      !Number.isSafeInteger(requestedQuantity) ||
+      requestedQuantity <= 0
+    ) {
+      return res.status(400).json({
+        message: "Quantity must be a positive whole number"
+      });
+    }
+
+    // Connect to PostgreSQL
+    client = await pool.connect();
 
     // Start transaction
     await client.query("BEGIN");
@@ -151,9 +219,12 @@ const addOrderItem = async (req, res) => {
     }
 
 
-    // 2. Find product and lock the row
+    // 2. Find product and lock its row
     const productResult = await client.query(
-      "SELECT * FROM products WHERE id = $1 FOR UPDATE",
+      `SELECT *
+       FROM products
+       WHERE id = $1
+       FOR UPDATE`,
       [product_id]
     );
 
@@ -167,19 +238,13 @@ const addOrderItem = async (req, res) => {
 
     const product = productResult.rows[0];
 
-
-    // 3. Validate quantity
-    if (!quantity || quantity <= 0) {
-      await client.query("ROLLBACK");
-
-      return res.status(400).json({
-        message: "Quantity must be greater than 0"
-      });
-    }
+    const previousQuantity = Number(
+      product.stock_quantity
+    );
 
 
-    // 4. Check available stock
-    if (product.stock_quantity < quantity) {
+    // 3. Check available stock
+    if (previousQuantity < requestedQuantity) {
       await client.query("ROLLBACK");
 
       return res.status(400).json({
@@ -188,34 +253,65 @@ const addOrderItem = async (req, res) => {
     }
 
 
-    // 5. Get trusted product price from PostgreSQL
+    // 4. Get trusted product price from PostgreSQL
     const unit_price = product.price;
 
 
-    // 6. Add item to the order
+    // 5. Add item to the order
     const result = await client.query(
       `INSERT INTO order_items
        (order_id, product_id, quantity, unit_price)
        VALUES ($1, $2, $3, $4)
        RETURNING *`,
-      [order_id, product_id, quantity, unit_price]
+      [
+        order_id,
+        product_id,
+        requestedQuantity,
+        unit_price
+      ]
     );
 
 
-    // 7. Reduce product stock
-    await client.query(
+    // 6. Reduce product stock
+    const stockResult = await client.query(
       `UPDATE products
        SET stock_quantity = stock_quantity - $1
-       WHERE id = $2`,
-      [quantity, product_id]
+       WHERE id = $2
+       RETURNING stock_quantity`,
+      [
+        requestedQuantity,
+        product_id
+      ]
+    );
+
+    const newQuantity = Number(
+      stockResult.rows[0].stock_quantity
     );
 
 
-    // 8. Recalculate the order total
+    // ================================
+    // 7. AUTOMATIC LOW-STOCK ALERT
+    // ================================
+
+    await createLowStockNotifications(
+      client,
+      product,
+      previousQuantity,
+      newQuantity
+    );
+
+
+    // ================================
+    // 8. RECALCULATE ORDER TOTAL
+    // ================================
+
     await client.query(
       `UPDATE orders
        SET total_amount = (
-         SELECT COALESCE(SUM(quantity * unit_price), 0)
+         SELECT COALESCE(
+           SUM(quantity * unit_price),
+           0
+         )
          FROM order_items
          WHERE order_id = $1
        )
@@ -224,29 +320,52 @@ const addOrderItem = async (req, res) => {
     );
 
 
-    // 9. Save all transaction changes
+    // ================================
+    // 9. COMMIT TRANSACTION
+    // ================================
+
     await client.query("COMMIT");
 
-    res.status(201).json(result.rows[0]);
+    return res.status(201).json(
+      result.rows[0]
+    );
 
   } catch (error) {
-    console.error(error);
+    console.error("Add order item error:", error);
 
-    // Undo transaction if something fails
-    await client.query("ROLLBACK");
+    if (client) {
+      try {
+        await client.query("ROLLBACK");
+      } catch (rollbackError) {
+        console.error(
+          "Rollback error:",
+          rollbackError
+        );
+      }
+    }
 
-    res.status(500).json({
+    return res.status(500).json({
       message: "Failed to add order item"
     });
 
   } finally {
-
-    // Return connection to PostgreSQL pool
-    client.release();
+    if (client) {
+      client.release();
+    }
   }
 };
 
+
+// ========================
+// UPDATE ORDER STATUS
+// ========================
+
+// ========================
+// UPDATE ORDER STATUS
+// ========================
 const updateOrderStatus = async (req, res) => {
+  let client;
+
   try {
     const { id } = req.params;
     const { status } = req.body;
@@ -259,36 +378,119 @@ const updateOrderStatus = async (req, res) => {
       "Cancelled"
     ];
 
+    // Validate requested status.
     if (!allowedStatuses.includes(status)) {
       return res.status(400).json({
         message: "Invalid order status"
       });
     }
 
-    const result = await pool.query(
-      `UPDATE orders
-       SET status = $1
-       WHERE id = $2
-       RETURNING *`,
-      [status, id]
+    // Validate order ID.
+    const orderId = Number(id);
+
+    if (
+      !Number.isSafeInteger(orderId) ||
+      orderId <= 0
+    ) {
+      return res.status(400).json({
+        message: "Invalid order ID"
+      });
+    }
+
+    client = await pool.connect();
+
+    await client.query("BEGIN");
+
+    // 1. Find the order and lock it.
+    const orderResult = await client.query(
+      `SELECT id, status
+       FROM orders
+       WHERE id = $1
+       FOR UPDATE`,
+      [orderId]
     );
 
-    if (result.rows.length === 0) {
+    if (orderResult.rows.length === 0) {
+      await client.query("ROLLBACK");
+
       return res.status(404).json({
         message: "Order not found"
       });
     }
 
-    res.status(200).json(result.rows[0]);
+    const previousStatus = orderResult.rows[0].status;
+
+    // 2. If the status hasn't changed,
+    //    return the existing order without
+    //    creating a notification.
+    if (previousStatus === status) {
+      const existingOrder = await client.query(
+        `SELECT *
+         FROM orders
+         WHERE id = $1`,
+        [orderId]
+      );
+
+      await client.query("COMMIT");
+
+      return res.status(200).json(
+        existingOrder.rows[0]
+      );
+    }
+
+    // 3. Update the order status.
+    const updatedOrder = await client.query(
+      `UPDATE orders
+       SET status = $1
+       WHERE id = $2
+       RETURNING *`,
+      [status, orderId]
+    );
+
+    // 4. Generate notifications for
+    //    active Admins and Managers.
+    await createOrderStatusNotification(
+      client,
+      orderId,
+      previousStatus,
+      status
+    );
+
+    // 5. Save status and notifications together.
+    await client.query("COMMIT");
+
+    return res.status(200).json(
+      updatedOrder.rows[0]
+    );
 
   } catch (error) {
-    console.error(error);
+    console.error(
+      "Update order status error:",
+      error
+    );
 
-    res.status(500).json({
+    if (client) {
+      try {
+        await client.query("ROLLBACK");
+      } catch (rollbackError) {
+        console.error(
+          "Order status rollback error:",
+          rollbackError
+        );
+      }
+    }
+
+    return res.status(500).json({
       message: "Failed to update order status"
     });
+
+  } finally {
+    if (client) {
+      client.release();
+    }
   }
 };
+
 
 
 // ========================

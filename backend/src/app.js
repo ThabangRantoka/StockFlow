@@ -12,6 +12,7 @@ const healthRoutes = require("./routes/healthRoutes");
 const productRoutes = require("./routes/productRoutes");
 const customerRoutes = require("./routes/customerRoutes");
 const orderRoutes = require("./routes/orderRoutes");
+const notificationRoutes = require("./routes/notificationRoutes");
 
 const app = express();
 
@@ -34,6 +35,8 @@ app.use("/api/customers", customerRoutes);
 app.use("/api/orders", orderRoutes);
 
 app.use("/api/dashboard", dashboardRoutes);
+
+app.use("/api/notifications", notificationRoutes);
 
 // NEW: Reports API
 app.use("/api/reports", reportsRoutes);

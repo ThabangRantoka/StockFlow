@@ -1,9 +1,10 @@
+
 import { createFileRoute } from "@tanstack/react-router";
 import { Bell, Cog, Lock, ShieldCheck, User, Users } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AppShell } from "@/components/layout/AppShell";
 import { Panel } from "@/components/shared/Panel";
-import { useSession } from "@/hooks/useSession";
+import { getToken, updateStoredUser, useSession, type StoredUser } from "@/hooks/useSession";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/settings")({
@@ -40,6 +41,132 @@ function SettingsPage() {
   const { user } = useSession();
   const [tab, setTab] = useState<(typeof tabs)[number]["id"]>("profile");
 
+  const [profile, setProfile] = useState<StoredUser | null>(null);
+  const [fullName, setFullName] = useState("");
+  const [email, setEmail] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [changingPassword, setChangingPassword] = useState(false);
+  const [passwordError, setPasswordError] = useState("");
+  const [passwordSuccess, setPasswordSuccess] = useState("");
+
+  useEffect(() => {
+    const controller = new AbortController();
+    async function loadProfile() {
+      try {
+        const token = getToken();
+        if (!token) throw new Error("Please sign in again.");
+        const response = await fetch("/api/auth/me", {
+          headers: { Authorization: `Bearer ${token}` },
+          signal: controller.signal,
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.message || "Could not load profile.");
+        const loaded = data.user as StoredUser;
+        setProfile(loaded);
+        setFullName(loaded.full_name);
+        setEmail(loaded.email);
+      } catch (err) {
+        if (!controller.signal.aborted) setError(err instanceof Error ? err.message : "Could not load profile.");
+      } finally {
+        if (!controller.signal.aborted) setLoading(false);
+      }
+    }
+    void loadProfile();
+    return () => controller.abort();
+  }, []);
+
+  function cancelProfile() {
+    if (!profile) return;
+    setFullName(profile.full_name);
+    setEmail(profile.email);
+    setError("");
+    setSuccess("");
+  }
+
+  async function saveProfile() {
+    if (!profile || saving) return;
+    setError("");
+    setSuccess("");
+    if (!fullName.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      setError("Enter a full name and a valid email address.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const token = getToken();
+      if (!token) throw new Error("Please sign in again.");
+      const response = await fetch("/api/auth/me", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ full_name: fullName.trim(), email: email.trim() }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || "Could not save profile.");
+      const updated = data.user as StoredUser;
+      setProfile(updated);
+      setFullName(updated.full_name);
+      setEmail(updated.email);
+      updateStoredUser(updated);
+      setSuccess("Profile saved successfully.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save profile.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function savePassword(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (changingPassword) return;
+    setPasswordError("");
+    setPasswordSuccess("");
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      setPasswordError("Please complete all three password fields.");
+      return;
+    }
+    if (newPassword.length < 8 || newPassword.length > 72) {
+      setPasswordError("New password must be between 8 and 72 characters.");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setPasswordError("New passwords do not match.");
+      return;
+    }
+    if (newPassword === currentPassword) {
+      setPasswordError("Choose a password different from your current password.");
+      return;
+    }
+    setChangingPassword(true);
+    try {
+      const token = getToken();
+      if (!token) throw new Error("Please sign in again.");
+      const response = await fetch("/api/auth/change-password", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ currentPassword, newPassword }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || "Could not change password.");
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      setPasswordSuccess("Password changed successfully. Use the new password next time you sign in.");
+    } catch (err) {
+      setPasswordError(err instanceof Error ? err.message : "Could not change password.");
+    } finally {
+      setChangingPassword(false);
+    }
+  }
+
   return (
     <AppShell title="Settings" subtitle="Workspace and account configuration">
       <div className="grid gap-4 lg:grid-cols-[240px_minmax(0,1fr)]">
@@ -62,14 +189,26 @@ function SettingsPage() {
         <div className="space-y-4">
           {tab === "profile" && (
             <Panel title="Profile" description="How your details appear across StockFlow">
-              <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="Full name" defaultValue={" "} />
-                <Field label="Work email" defaultValue={" "} />
-                <Field label="Role" defaultValue=" " />
-                <Field label="Account status" defaultValue=" " />
-                <Field label="Phone" defaultValue=" " />
-              </div>
-              <SaveBar />
+              {loading ? <p className="text-sm text-muted-foreground">Loading profile...</p> : (
+                <>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <label className="block"><span className="text-xs font-semibold">Full name</span>
+                      <input className={inputCls + " mt-1.5"} value={fullName} onChange={(e) => setFullName(e.target.value)} disabled={!profile || saving} />
+                    </label>
+                    <label className="block"><span className="text-xs font-semibold">Work email</span>
+                      <input type="email" className={inputCls + " mt-1.5"} value={email} onChange={(e) => setEmail(e.target.value)} disabled={!profile || saving} />
+                    </label>
+                    <label className="block"><span className="text-xs font-semibold">Role</span><input className={inputCls + " mt-1.5"} value={profile?.role || ""} readOnly /></label>
+                    <label className="block"><span className="text-xs font-semibold">Account status</span><input className={inputCls + " mt-1.5"} value={profile?.status || ""} readOnly /></label>
+                  </div>
+                  {error && <p role="alert" className="mt-3 text-sm text-destructive">{error}</p>}
+                  {success && <p role="status" className="mt-3 text-sm text-foreground">{success}</p>}
+                  <div className="mt-5 flex justify-end gap-2 border-t border-border pt-4">
+                    <button type="button" onClick={cancelProfile} disabled={!profile || saving} className="h-10 rounded-lg border border-border px-4 text-sm font-semibold">Cancel</button>
+                    <button type="button" onClick={() => void saveProfile()} disabled={!profile || saving} className="h-10 rounded-lg bg-primary px-5 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50">{saving ? "Saving..." : "Save changes"}</button>
+                  </div>
+                </>
+              )}
             </Panel>
           )}
 
@@ -81,21 +220,34 @@ function SettingsPage() {
                 <Select label="Currency" options={["ZAR — South African Rand", "USD — US Dollar"]} />
                 <Select label="Timezone" options={["Africa/Johannesburg (UTC+2)", "UTC"]} />
               </div>
-              <SaveBar />
+              <p className="mt-5 text-xs text-muted-foreground">These settings are not connected to the backend yet.</p>
             </Panel>
           )}
 
           {tab === "security" && (
             <Panel title="Security" description="Password and session protection">
-              <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="Current password" type="password" defaultValue="" />
-                <Field label="New password" type="password" defaultValue="" />
-              </div>
+              <form onSubmit={(event) => void savePassword(event)}>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <label className="block"><span className="text-xs font-semibold">Current password</span>
+                    <input type="password" autoComplete="current-password" className={inputCls + " mt-1.5"} value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} disabled={changingPassword} required />
+                  </label>
+                  <label className="block"><span className="text-xs font-semibold">New password</span>
+                    <input type="password" autoComplete="new-password" minLength={8} className={inputCls + " mt-1.5"} value={newPassword} onChange={(e) => setNewPassword(e.target.value)} disabled={changingPassword} required />
+                  </label>
+                  <label className="block sm:col-span-2"><span className="text-xs font-semibold">Confirm new password</span>
+                    <input type="password" autoComplete="new-password" minLength={8} className={inputCls + " mt-1.5"} value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} disabled={changingPassword} required />
+                  </label>
+                </div>
+                {passwordError && <p role="alert" className="mt-3 text-sm text-destructive">{passwordError}</p>}
+                {passwordSuccess && <p role="status" className="mt-3 text-sm text-foreground">{passwordSuccess}</p>}
+                <div className="mt-5 flex justify-end border-t border-border pt-4">
+                  <button type="submit" disabled={changingPassword} className="h-10 rounded-lg bg-primary px-5 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50">{changingPassword ? "Changing password..." : "Change password"}</button>
+                </div>
+              </form>
               <div className="mt-5 space-y-3 border-t border-border pt-4">
-                <Toggle label="Two-factor authentication" desc="Require an authenticator code at sign in." defaultChecked />
-                <Toggle label="Sign out inactive sessions" desc="End sessions after 30 minutes of inactivity." defaultChecked />
+                <p className="text-sm font-semibold">Additional security features</p>
+                <p className="text-xs text-muted-foreground">Two-factor authentication and automatic session timeout are not implemented yet.</p>
               </div>
-              <SaveBar />
             </Panel>
           )}
 
@@ -107,7 +259,7 @@ function SettingsPage() {
                 <Toggle label="Failed payments" desc="Alert when a payment is declined or reversed." defaultChecked />
                 <Toggle label="Weekly summary email" desc="Sales, stock and customer digest every Monday." />
               </div>
-              <SaveBar />
+              <p className="mt-5 text-xs text-muted-foreground">These settings are not connected to the backend yet.</p>
             </Panel>
           )}
 
@@ -119,7 +271,7 @@ function SettingsPage() {
                 <Field label="Global reorder threshold" defaultValue="20" />
                 <Select label="Date format" options={["DD MMM YYYY", "YYYY-MM-DD"]} />
               </div>
-              <SaveBar />
+              <p className="mt-5 text-xs text-muted-foreground">These settings are not connected to the backend yet.</p>
             </Panel>
           )}
 
@@ -186,16 +338,5 @@ function Toggle({ label, desc, defaultChecked }: { label: string; desc: string; 
       </span>
       <input type="checkbox" defaultChecked={defaultChecked} className="h-5 w-5 shrink-0 rounded accent-primary" />
     </label>
-  );
-}
-
-function SaveBar() {
-  return (
-    <div className="mt-5 flex justify-end gap-2 border-t border-border pt-4">
-      <button className="h-10 rounded-lg border border-border px-4 text-sm font-semibold">Cancel</button>
-      <button className="h-10 rounded-lg bg-primary px-5 text-sm font-semibold text-primary-foreground hover:bg-primary/90">
-        Save changes
-      </button>
-    </div>
   );
 }
