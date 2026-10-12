@@ -53,6 +53,17 @@ The application provides a centralized interface for managing products, inventor
 - Visual Studio Code
 - Postman
 - npm
+  
+
+https://github.com/user-attachments/assets/19d719f4-5517-4578-b73a-25db3b751449
+
+
+
+
+
+
+
+
 
 ## Architecture
 
